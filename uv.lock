@@ -1206,6 +1206,12 @@ wheels = [
 name = "workers-ingest"
 version = "0.0.0"
 source = { editable = "workers/ingest" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
 
 [[package]]
 name = "workers-normalize"
