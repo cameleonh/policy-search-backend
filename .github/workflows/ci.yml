@@ -83,3 +83,40 @@ jobs:
         run: pnpm run test:ts
       - name: Next.js production build
         run: pnpm --filter @policy-search/web build
+
+  migrations:
+    name: PostgreSQL migration tests
+    runs-on: ubuntu-latest
+    needs: [python]
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: policy
+          POSTGRES_PASSWORD: policy
+          POSTGRES_DB: policy_search
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U policy"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://policy:policy@localhost:5432/policy_search
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync
+      - name: Apply migrations
+        run: uv run alembic upgrade head
+      - name: Re-run migrations (idempotency)
+        run: uv run alembic upgrade head
+      - name: Run migration tests
+        run: uv run pytest db/tests/ -v

@@ -43,13 +43,19 @@ policy-search-backend/
 │   └── normalize/           Policy / eligibility normalization (Python)
 ├── packages/
 │   ├── contracts/           Shared TypeScript types (cross-service contracts)
+│   ├── contracts-py/        Shared Python Pydantic models
 │   └── matching/            Deterministic three-valued rule evaluator (Python)
 ├── db/
-│   ├── migrations/          PostgreSQL migrations
-│   └── views/               PostgreSQL views
+│   ├── base.py              SQLAlchemy declarative base
+│   ├── enums.py             Shared Python enums (mirror DB CHECK constraints)
+│   ├── models.py            SQLAlchemy ORM models (13 tables)
+│   ├── migrations/          Alembic migrations
+│   │   └── alembic/         env.py, script template, versions/
+│   └── views/               PostgreSQL views (latest_policy_versions in migration)
 ├── tasks/
 │   ├── prd-policy-search-platform.md
 │   └── github-issue-plan.md
+├── alembic.ini              Alembic configuration
 ├── .github/workflows/       CI pipelines
 ├── pnpm-workspace.yaml      TS workspace definition
 ├── pyproject.toml           Python workspace + tool config (ruff, mypy, pytest)
@@ -63,11 +69,14 @@ policy-search-backend/
 packages/contracts ──────────────── apps/web
                    └──────────────── workers/document-extract
 
+packages/contracts-py ───────────── apps/api
+                       └──────────── workers/ingest, workers/normalize
+
 packages/matching  ──────────────── workers/normalize
                    └──────────────── apps/api
 
-db/                ← consumed by apps/api, workers/ingest, workers/normalize
-tasks/             ← documentation only, no runtime dependency
+db/ (models, enums) ← consumed by apps/api, workers/ingest, workers/normalize
+tasks/               ← documentation only, no runtime dependency
 ```
 
 - `packages/*` are leaf libraries — they must not import from `apps/` or
@@ -77,14 +86,30 @@ tasks/             ← documentation only, no runtime dependency
 - Python packages communicate with Node.js workers via the shared JSON
   contracts in `packages/contracts`.
 
+## Database
+
+The platform uses PostgreSQL 16 with `pgcrypto`, `pg_trgm`, and `pgvector`
+extensions.  All policy data is append-only — updates create new
+`policy_version` rows, never `UPDATE` existing ones.
+
+```bash
+# Apply migrations
+DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/policy_search \
+  uv run alembic upgrade head
+```
+
+The `latest_policy_versions` view returns the most recent valid version per
+program.
+
 ## CI
 
-GitHub Actions runs four parallel jobs on every PR and on `main` pushes:
+GitHub Actions runs five parallel jobs on every PR and on `main` pushes:
 
 1. **docs** — validates that `tasks/` markdown is present
-2. **python** — `ruff check`, `mypy`, `pytest`
+2. **python** — `ruff check`, `ruff format --check`, `mypy`, `pytest`
 3. **typescript** — `eslint`, `tsc --noEmit`
-4. **test** — `vitest` + `pytest` + Next.js production build smoke
+4. **build** — `vitest` + Next.js production build smoke
+5. **migrations** — PostgreSQL service container with `alembic upgrade head` + migration integration tests
 
 ## Environment
 
