@@ -1,0 +1,6 @@
+[project]
+name = "workers-ingest"
+version = "0.0.0"
+description = "Weekly source ingestion worker"
+requires-python = ">=3.12"
+dependencies = []

@@ -1,0 +1,10 @@
+[project]
+name = "apps-api"
+version = "0.0.0"
+description = "FastAPI search and operations API"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+]

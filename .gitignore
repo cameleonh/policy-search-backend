@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Build output
+.next/
+out/
+dist/
+build/
+*.tsbuildinfo
+
+# Environment and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.p12
+*.pfx
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test output
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
+test-results/
+
+# Database
+*.db
+*.sqlite3
+
+# Ingestion artifacts
+data/raw/
+data/processed/
+
+# uv lock is committed; pnpm lock is committed
+# but package manager caches are not
+.pnpm-store/
