@@ -1,0 +1,14 @@
+{
+  "pbancSn": "100001",
+  "pbancNm": "소상공인 경영안정 자금 지원",
+  "departNm": "소상공인시장진흥공단",
+  "regionNmList": "전국",
+  "rcptPd": {"from": "2026-01-01", "to": "2026-06-30"},
+  "aplyPsbltySe": "Y",
+  "hstgNm": "경영안정,자금지원",
+  "rcrtTypeCdNm": "지원자금",
+  "bizType": "소상공인",
+  "pbancKindCd": "01",
+  "pbancGubun": "A",
+  "bizYr": "2026"
+}

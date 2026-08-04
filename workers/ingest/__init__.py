@@ -20,6 +20,7 @@ from workers.ingest.errors import (
 )
 from workers.ingest.exit_codes import ExitCode
 from workers.ingest.region_util import canon_region
+from workers.ingest.sbiz24_adapter import Sbiz24Adapter, normalize_combine, normalize_pbanc
 from workers.ingest.source_definition import (
     KNOWN_SOURCES,
     CredentialRequirement,
@@ -55,6 +56,7 @@ __all__ = [
     "RecordType",
     "RetryableError",
     "RobotsStatus",
+    "Sbiz24Adapter",
     "SourceAdapter",
     "SourceCategory",
     "SourceDefinition",
@@ -63,6 +65,8 @@ __all__ = [
     "canon_region",
     "exit_code_from_outcome",
     "find_duplicates",
+    "normalize_combine",
+    "normalize_pbanc",
     "normalize_youthcenter",
     "outcome_from_counts",
     "robotsDisallowedError",
