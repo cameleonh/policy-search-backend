@@ -1217,3 +1217,9 @@ requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
 name = "workers-normalize"
 version = "0.0.0"
 source = { editable = "workers/normalize" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.9" }]
