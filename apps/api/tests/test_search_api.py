@@ -1,8 +1,18 @@
-"""Tests for the search API contracts and endpoint (Issue #18)."""
+"""Tests for the search API contracts and endpoint (Issue #18).
+
+Search endpoint tests use an in-memory SQLite DB to avoid requiring
+a live PostgreSQL instance.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Generator
+from typing import Any
+
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import StaticPool
 
 from apps.api.contracts.search import (
     EvidenceRef,
@@ -13,20 +23,81 @@ from apps.api.contracts.search import (
 )
 from apps.api.main import app
 
-client = TestClient(app)
+
+@pytest.fixture
+def db_client() -> TestClient:
+    """Create a test client with an in-memory SQLite database."""
+    engine = create_engine(
+        "sqlite://", echo=False, connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY, source_key TEXT UNIQUE, name TEXT, url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS programs (id INTEGER PRIMARY KEY, source_id INTEGER, remote_id TEXT, canonical_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS policy_versions (id INTEGER PRIMARY KEY, program_id INTEGER, version_number INTEGER, title TEXT, content_sha256 TEXT, target_type TEXT, announcement_url TEXT, collected_at TEXT DEFAULT CURRENT_TIMESTAMP, is_valid INTEGER DEFAULT 1)"
+            )
+        )
+
+        conn.execute(
+            text(
+                "INSERT INTO sources (id, source_key, name, url) VALUES (1, 'youthcenter', '온통청년', 'https://youthcenter.go.kr')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO programs (id, source_id, remote_id, canonical_url) VALUES (1, 1, 'P001', 'https://example.com/1')"
+            )
+        )
+        conn.execute(
+            text(
+                "INSERT INTO policy_versions (id, program_id, version_number, title, content_sha256, target_type, announcement_url, is_valid) VALUES (1, 1, 1, '청년 창업 지원', 'abc', 'individual', 'https://example.com/1', 1)"
+            )
+        )
+        # Create latest view after data is inserted
+        conn.execute(text("DROP TABLE IF EXISTS latest_policy_versions"))
+        conn.execute(
+            text("""
+            CREATE TABLE latest_policy_versions AS
+            SELECT p.id AS program_id, p.source_id, p.remote_id, p.canonical_url,
+                   pv.id AS policy_version_id, pv.version_number, pv.title,
+                   pv.content_sha256, pv.target_type, pv.announcement_url,
+                   pv.collected_at, pv.is_valid
+            FROM programs p
+            JOIN policy_versions pv ON pv.program_id = p.id
+            WHERE pv.is_valid = 1
+        """)
+        )
+
+    import apps.api.routers.search as search_router
+
+    original_get_engine = search_router._get_engine
+    search_router._get_engine = lambda: engine
+
+    yield TestClient(app)
+
+    search_router._get_engine = original_get_engine
 
 
 class TestSearchEndpoint:
-    def test_search_returns_response(self) -> None:
-        response = client.post("/v1/search", json={})
+    def test_search_returns_response(self, db_client: TestClient) -> None:
+        response = db_client.post("/v1/search", json={})
         assert response.status_code == 200
         data = response.json()
         assert "data_version" in data
         assert "results" in data
         assert isinstance(data["results"], list)
 
-    def test_search_accepts_profile(self) -> None:
-        response = client.post(
+    def test_search_accepts_profile(self, db_client: TestClient) -> None:
+        response = db_client.post(
             "/v1/search",
             json={
                 "region": "서울특별시",
@@ -38,16 +109,17 @@ class TestSearchEndpoint:
         assert response.status_code == 200
 
     def test_search_page_validation(self) -> None:
+        client = TestClient(app)
         response = client.post("/v1/search", json={"page": 0})
         assert response.status_code == 422
 
     def test_search_page_size_limit(self) -> None:
+        client = TestClient(app)
         response = client.post("/v1/search", json={"page_size": 200})
         assert response.status_code == 422
 
-    def test_no_profile_raw_data_in_response(self) -> None:
-        """Profile raw values must not appear in response."""
-        response = client.post(
+    def test_no_profile_raw_data_in_response(self, db_client: TestClient) -> None:
+        response = db_client.post(
             "/v1/search",
             json={"region": "SECRET_REGION_VALUE", "industry": "SECRET_INDUSTRY"},
         )
@@ -86,7 +158,6 @@ class TestContracts:
         assert PolicyCategory.BOTH.value == "both"
 
     def test_openapi_schema_generation(self) -> None:
-        """OpenAPI schema should be generated without error."""
         schema = app.openapi()
         assert "/v1/search" in schema["paths"]
         assert "post" in schema["paths"]["/v1/search"]

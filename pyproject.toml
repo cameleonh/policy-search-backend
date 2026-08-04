@@ -52,7 +52,7 @@ warn_return_any = true
 warn_unused_configs = true
 mypy_path = ".,packages/contracts-py"
 explicit_package_bases = true
-exclude = ["tasks/"]
+exclude = ["tasks/", "scripts/"]
 
 # ── Pytest ────────────────────────────────────
 [tool.pytest.ini_options]
