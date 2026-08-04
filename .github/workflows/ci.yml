@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  docs:
+    name: Docs check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify PRD and issue plan exist
+        run: |
+          test -f tasks/prd-policy-search-platform.md
+          test -f tasks/github-issue-plan.md
+
+  python:
+    name: Python lint, typecheck, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install dependencies
+        run: uv sync
+      - name: Lint (ruff)
+        run: uv run ruff check .
+      - name: Format check (ruff)
+        run: uv run ruff format --check .
+      - name: Typecheck (mypy)
+        run: uv run mypy .
+      - name: Test (pytest)
+        run: uv run pytest
+      - name: API import smoke
+        run: uv run python -c "from apps.api.main import app; print(app.title)"
+
+  typescript:
+    name: TypeScript lint, typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Lint
+        run: pnpm run lint:ts
+      - name: Typecheck
+        run: pnpm run typecheck:ts
+
+  build:
+    name: Production build + tests
+    runs-on: ubuntu-latest
+    needs: [python, typescript]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Install Python dependencies
+        run: uv sync
+      - name: Install TypeScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: TypeScript tests (vitest)
+        run: pnpm run test:ts
+      - name: Next.js production build
+        run: pnpm --filter @policy-search/web build

@@ -1,0 +1,6 @@
+[project]
+name = "packages-matching"
+version = "0.0.0"
+description = "Deterministic three-valued eligibility rule evaluator"
+requires-python = ">=3.12"
+dependencies = []

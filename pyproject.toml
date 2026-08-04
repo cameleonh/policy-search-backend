@@ -1,0 +1,57 @@
+[project]
+name = "policy-search-backend"
+version = "0.0.0"
+description = "Youth and small-business unified policy search platform"
+requires-python = ">=3.12"
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]
+
+[tool.uv.workspace]
+members = [
+    "apps/api",
+    "workers/ingest",
+    "workers/normalize",
+]
+
+[tool.uv.sources]
+apps-api = { workspace = true }
+workers-ingest = { workspace = true }
+workers-normalize = { workspace = true }
+
+# ── Ruff ──────────────────────────────────────
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+
+# ── Mypy ──────────────────────────────────────
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+mypy_path = "."
+explicit_package_bases = true
+exclude = ["tasks/"]
+
+# ── Pytest ────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["apps", "workers", "packages"]
+pythonpath = ["."]
+python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"
