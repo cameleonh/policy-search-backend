@@ -2,6 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN pip install uv
 
 COPY pyproject.toml uv.lock alembic.ini ./
@@ -9,6 +10,9 @@ COPY apps/api/ apps/api/
 COPY workers/ workers/
 COPY packages/ packages/
 COPY db/ db/
+COPY scripts/ scripts/
 RUN uv sync --no-dev
 
-CMD ["echo", "Ingest worker ready. Run manually: uv run python -m workers.ingest.main"]
+ENV PYTHONPATH=/app
+
+CMD ["uv", "run", "python", "scripts/ingest_all.py"]

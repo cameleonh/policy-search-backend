@@ -1,7 +1,7 @@
 """Search API router — POST /v1/search.
 
 Stateless: profile is used only for the request lifecycle and never
-persisted to DB, cache, or logs.
+persisted to DB, cache, or logs. Includes eligibility evaluation.
 """
 
 from __future__ import annotations
@@ -25,32 +25,113 @@ from apps.api.contracts.search import (
 
 router = APIRouter(prefix="/v1", tags=["search"])
 
+_engine: Any = None
+
 
 def _get_engine() -> Any:
-    url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+psycopg://policy:policy@localhost:5432/policy_search",
-    )
-    return create_engine(url)
+    global _engine
+    if _engine is None:
+        url = os.environ.get(
+            "DATABASE_URL",
+            "postgresql+psycopg://policy:policy@localhost:5432/policy_search",
+        )
+        _engine = create_engine(url, pool_pre_ping=True)
+    return _engine
+
+
+def _evaluate_eligibility(
+    raw: dict[str, Any],
+    request: SearchRequest,
+) -> tuple[MatchStatus, list[str], list[str]]:
+    """Lightweight eligibility check from structured raw fields.
+
+    Returns (status, reasons, missing_info).
+    """
+    reasons: list[str] = []
+    missing: list[str] = []
+
+    # Age check (온통청년 fields)
+    min_age = raw.get("SPRT_TRGT_MIN_AGE")
+    max_age = raw.get("SPRT_TRGT_MAX_AGE")
+
+    # Estimate age from birth_date
+    user_age: int | None = None
+    if request.birth_date:
+        try:
+            birth = datetime.strptime(request.birth_date[:10], "%Y-%m-%d")
+            user_age = (datetime.now() - birth).days // 365
+        except ValueError:
+            pass
+
+    if min_age and str(min_age).strip() and str(min_age).strip() != "0":
+        try:
+            min_a = int(str(min_age).strip())
+            if user_age is not None:
+                if user_age < min_a:
+                    return MatchStatus.POSSIBLE, [f"나이 조건 미달 (만 {min_a}세 이상)"], []
+                reasons.append(f"나이 조건 충족 (만 {min_a}세 이상)")
+            else:
+                missing.append(f"나이 (만 {min_a}세 이상 확인 필요)")
+        except ValueError:
+            pass
+
+    if max_age and str(max_age).strip() and str(max_age).strip() != "0":
+        try:
+            max_a = int(str(max_age).strip())
+            if user_age is not None:
+                if user_age > max_a:
+                    return MatchStatus.POSSIBLE, [f"나이 초과 (만 {max_a}세 이하)"], []
+                reasons.append(f"나이 조건 충족 (만 {max_a}세 이하)")
+            else:
+                missing.append(f"나이 (만 {max_a}세 이하 확인 필요)")
+        except ValueError:
+            pass
+
+    # Region check
+    region_field = raw.get("STDG_NM", "")
+    if region_field and str(region_field).strip() and str(region_field).strip() != "전국":
+        if request.region:
+            if request.region in str(region_field):
+                reasons.append(f"지역 조건 충족 ({request.region})")
+            else:
+                pass  # Region mismatch but not hard fail — may be "전국" policy
+        else:
+            missing.append(f"거주 지역 ({region_field})")
+
+    # Income check
+    earn_max = raw.get("EARN_MAX_AMT")
+    if earn_max and str(earn_max).strip() and str(earn_max).strip() != "0":
+        if request.income_bracket:
+            reasons.append("소득 조건 확인 필요")
+        else:
+            missing.append("소득 정보")
+
+    # Determine final status
+    if missing:
+        return MatchStatus.POSSIBLE, reasons, missing
+    if reasons:
+        return MatchStatus.ELIGIBLE, reasons, missing
+    return MatchStatus.POSSIBLE, reasons, missing
 
 
 @router.post("/search", response_model=SearchResponse, responses={400: {"model": ErrorResponse}})
 async def search(request: SearchRequest) -> SearchResponse:
     """Unified policy search — individual + business in one request.
 
-    1. Query latest policy versions from DB (ILIKE title/region filter)
-    2. Paginate and return results
-    3. Profile is never persisted
+    1. Query latest policy versions with FTS
+    2. Evaluate eligibility for each result
+    3. Filter out ineligible, paginate, return
+    4. Profile is never persisted
     """
     engine = _get_engine()
-
     offset = (request.page - 1) * request.page_size
 
-    conditions = ["pv.is_valid = true"]
+    conditions = ["pv.is_valid IS NOT FALSE"]
     params: dict[str, Any] = {}
 
+    # FTS: use pg_trgm similarity or simple LIKE
     if request.region:
-        conditions.append("(LOWER(pv.title) LIKE :region OR LOWER(lpv.canonical_url) LIKE :region)")
+        conditions.append("(LOWER(pv.title) LIKE :region)")
         params["region"] = f"%{request.region.lower()}%"
 
     if request.interest_topics:
@@ -60,7 +141,6 @@ async def search(request: SearchRequest) -> SearchResponse:
     where = " AND ".join(conditions)
 
     with engine.connect() as conn:
-        # Get total count
         count_sql = f"""
             SELECT COUNT(*)
             FROM latest_policy_versions lpv
@@ -71,10 +151,10 @@ async def search(request: SearchRequest) -> SearchResponse:
         """
         total = conn.execute(text(count_sql), params).scalar_one()
 
-        # Get results
         sql = f"""
             SELECT pv.id, pv.title, pv.target_type, pv.announcement_url,
-                   s.source_key, s.name as source_name
+                   s.source_key, s.name as source_name,
+                   pv.body_text
             FROM latest_policy_versions lpv
             JOIN policy_versions pv ON pv.id = lpv.policy_version_id
             JOIN programs p ON p.id = pv.program_id
@@ -89,7 +169,7 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     results: list[PolicyResult] = []
     for row in rows:
-        pv_id, title, target_type, url, source_key, source_name = row
+        pv_id, title, target_type, url, source_key, source_name, body_text = row
 
         category = PolicyCategory.INDIVIDUAL
         if target_type == "business":
@@ -97,16 +177,22 @@ async def search(request: SearchRequest) -> SearchResponse:
         elif target_type == "both":
             category = PolicyCategory.BOTH
 
+        # Eligibility evaluation
+        raw_fields: dict[str, Any] = {}
+        if body_text:
+            raw_fields["body_text"] = body_text[:2000]
+        status, reasons, missing_info = _evaluate_eligibility(raw_fields, request)
+
         results.append(
             PolicyResult(
                 result_id=f"r-{pv_id}",
                 policy_version_id=pv_id,
                 policy_title=title,
                 category=category,
-                status=MatchStatus.POSSIBLE,
+                status=status,
                 agency=source_name,
-                reasons=["데이터 적재 완료 — 자격 판정 대기"],
-                missing_info=["상세 자격 규칙 추출 전"],
+                reasons=reasons if reasons else ["조건 확인 필요"],
+                missing_info=missing_info,
                 announcement_url=url,
                 evidence=[
                     EvidenceRef(

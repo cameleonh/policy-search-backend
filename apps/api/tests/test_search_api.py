@@ -43,7 +43,7 @@ def db_client() -> TestClient:
         )
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS policy_versions (id INTEGER PRIMARY KEY, program_id INTEGER, version_number INTEGER, title TEXT, content_sha256 TEXT, target_type TEXT, announcement_url TEXT, collected_at TEXT DEFAULT CURRENT_TIMESTAMP, is_valid INTEGER DEFAULT 1)"
+                "CREATE TABLE IF NOT EXISTS policy_versions (id INTEGER PRIMARY KEY, program_id INTEGER, version_number INTEGER, title TEXT, content_sha256 TEXT, target_type TEXT, announcement_url TEXT, body_text TEXT, collected_at TEXT DEFAULT CURRENT_TIMESTAMP, is_valid BOOLEAN DEFAULT 1)"
             )
         )
 
@@ -80,11 +80,13 @@ def db_client() -> TestClient:
     import apps.api.routers.search as search_router
 
     original_get_engine = search_router._get_engine
-    search_router._get_engine = lambda: engine
+    original_engine = search_router._engine
+    search_router._engine = engine  # Set global cache to our test engine
 
     yield TestClient(app)
 
     search_router._get_engine = original_get_engine
+    search_router._engine = original_engine
 
 
 class TestSearchEndpoint:
