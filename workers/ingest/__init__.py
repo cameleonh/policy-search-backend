@@ -19,6 +19,7 @@ from workers.ingest.errors import (
     robotsDisallowedError,
 )
 from workers.ingest.exit_codes import ExitCode
+from workers.ingest.region_util import canon_region
 from workers.ingest.source_definition import (
     KNOWN_SOURCES,
     CredentialRequirement,
@@ -32,6 +33,10 @@ from workers.ingest.source_record import (
     RecordStatus,
     RecordType,
     SourceRecord,
+)
+from workers.ingest.youthcenter_adapter import (
+    YouthcenterAdapter,
+    normalize_youthcenter,
 )
 
 __all__ = [
@@ -54,8 +59,11 @@ __all__ = [
     "SourceCategory",
     "SourceDefinition",
     "SourceRecord",
+    "YouthcenterAdapter",
+    "canon_region",
     "exit_code_from_outcome",
     "find_duplicates",
+    "normalize_youthcenter",
     "outcome_from_counts",
     "robotsDisallowedError",
 ]
