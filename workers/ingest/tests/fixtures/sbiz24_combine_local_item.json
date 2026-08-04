@@ -1,0 +1,14 @@
+{
+  "pbancId": "200002",
+  "pbancSn": "200002",
+  "pbancNm": "지자체 소상공인 지원",
+  "departNm": "서울특별시",
+  "regionNmList": "서울",
+  "aplyPd": "2026-03-01 ~ 2026-05-31",
+  "aplyPsbltySe": "N",
+  "hstgNm": "지자체",
+  "rcrtTypeCdNm": "운영지원",
+  "bizType": "지자체",
+  "pbancGubun": "D",
+  "bizYr": "2026"
+}
