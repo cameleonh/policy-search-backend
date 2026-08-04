@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from apps.api.routers import health
+from apps.api.routers import health, search
 
 app = FastAPI(
     title="Policy Search API",
@@ -9,3 +9,4 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
+app.include_router(search.router)
