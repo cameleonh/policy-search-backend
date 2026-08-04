@@ -1,0 +1,70 @@
+# Docker Compose deployment for policy-search-backend
+# Issue #22 — single Lightsail instance: web + api + db
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: policy
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-policy}
+      POSTGRES_DB: policy_search
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U policy"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # No port exposure — internal network only
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://policy:${POSTGRES_PASSWORD:-policy}@db:5432/policy_search
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Ingest worker — runs weekly, has archive repo write token
+  ingest:
+    build:
+      context: .
+      dockerfile: Dockerfile.ingest
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://policy:${POSTGRES_PASSWORD:-policy}@db:5432/policy_search
+      ARCHIVE_GITHUB_TOKEN: ${ARCHIVE_GITHUB_TOKEN}
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 1G
+
+volumes:
+  pgdata:
