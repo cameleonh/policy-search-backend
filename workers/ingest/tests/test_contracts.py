@@ -273,8 +273,12 @@ class TestSourceDefinition:
         assert src.execution_mode == ExecutionMode.WEB_SCRAPING
 
     def test_credential_requirement_defaults(self) -> None:
-        for src in KNOWN_SOURCES.values():
-            assert src.credential_requirement == CredentialRequirement.NONE
+        for key, src in KNOWN_SOURCES.items():
+            # gov24 requires an API key; all others use NONE
+            if key == "gov24":
+                assert src.credential_requirement == CredentialRequirement.API_KEY
+            else:
+                assert src.credential_requirement == CredentialRequirement.NONE
 
     def test_robots_status_is_allowed_or_known(self) -> None:
         for src in KNOWN_SOURCES.values():
