@@ -4,6 +4,7 @@ Issue #3 defines the interface; network implementations land in #4–#12.
 """
 
 from workers.ingest.adapter import SourceAdapter
+from workers.ingest.bizinfo_adapter import BizinfoAdapter, normalize_bizinfo
 from workers.ingest.collection_report import (
     CollectionOutcome,
     CollectionReport,
@@ -44,6 +45,7 @@ __all__ = [
     "AdapterError",
     "AttachmentMeta",
     "BlockedError",
+    "BizinfoAdapter",
     "CollectionOutcome",
     "CollectionReport",
     "CredentialRequirement",
@@ -65,6 +67,7 @@ __all__ = [
     "canon_region",
     "exit_code_from_outcome",
     "find_duplicates",
+    "normalize_bizinfo",
     "normalize_combine",
     "normalize_pbanc",
     "normalize_youthcenter",
