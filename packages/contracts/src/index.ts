@@ -35,6 +35,7 @@ export interface PolicyResult {
   category: PolicyCategory;
   status: MatchStatus;
   agency: string;
+  topic: string;
   reasons: string[];
   missing_info: string[];
   benefits: string[];

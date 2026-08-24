@@ -129,6 +129,28 @@ def _age_bounds(raw: dict[str, Any]) -> tuple[int | None, int | None]:
     return None, None
 
 
+# Title-keyword topic classifier — sources carry no benefit category
+# (PLCY_KND_NM is empty; SPCL_FLD_NM is a special-group field), so the
+# display topic is derived deterministically from the title.
+_TOPIC_RULES: list[tuple[str, re.Pattern[str]]] = [
+    ("금융·자금", re.compile(r"대출|융자|이자|보증|금융|자금|대부|출자")),
+    ("주거", re.compile(r"주거|주택|임대|하우스|월세|전세|기숙사|거주|숙소")),
+    ("일자리", re.compile(r"일자리|취업|고용|인턴|채용|직무|근로|잡")),
+    ("창업", re.compile(r"창업|스타트업|벤처")),
+    ("교육·역량", re.compile(r"교육|훈련|연수|학습|강의|자격증|멘토|캠프|아카데미|클래스|학교")),
+    ("농업·농촌", re.compile(r"농업|영농|농촌|귀농")),
+    ("생활·문화", re.compile(r"의료|건강|돌봄|문화|예술|여행|체험|상담|바우처|패스|장학")),
+    ("행사·모집", re.compile(r"모집|행사|페스타|페스티벌|네트워크|동아리|크루|클럽")),
+]
+
+
+def _topic_from_title(title: str) -> str:
+    for topic, pattern in _TOPIC_RULES:
+        if pattern.search(title):
+            return topic
+    return "기타"
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     """JSONB arrives as dict on psycopg; SQLite test rows arrive as str."""
     if isinstance(value, dict):
@@ -260,6 +282,11 @@ async def search(request: SearchRequest) -> SearchResponse:
     """
     engine = _get_engine()
     offset = (request.page - 1) * request.page_size
+    # JSON accessor differs by dialect: PostgreSQL ->>, SQLite json_extract.
+    is_sqlite = engine.dialect.name == "sqlite"
+
+    def raw_get(key: str) -> str:
+        return f"json_extract(pv.raw, '$.{key}')" if is_sqlite else f"pv.raw->>'{key}'"
 
     conditions = ["pv.is_valid IS NOT FALSE"]
     params: dict[str, Any] = {}
@@ -269,13 +296,24 @@ async def search(request: SearchRequest) -> SearchResponse:
     if not request.is_business_owner:
         conditions.append("pv.target_type <> 'business'")
 
-    # Titles carry the region token ([서울], (광양시), 충남형 ...), so match the
-    # normalized root: 서울특별시 / 서울시 / 서울 all filter as '%서울%'.
+    # Exclude announcements whose application window has closed — the raw
+    # APLY_PRD_END_YMD is YYYYMMDD or empty; always-open/no-date rows pass.
+    conditions.append(
+        f"(COALESCE(NULLIF({raw_get('APLY_PRD_END_YMD')}, ''), '99991231') >= :today)"
+    )
+    params["today"] = datetime.now().strftime("%Y%m%d")
+
+    # Titles carry the region token ([서울], (광양시), 충남형 ...), and the
+    # structured STDG_NM region field lists covered regions — match either so
+    # 서울 policies without 서울 in the title are still found.
     if request.region:
         root = _region_root(request.region)
         if root:
-            conditions.append("(pv.title LIKE :region)")
+            conditions.append(
+                f"(pv.title LIKE :region OR {raw_get('STDG_NM')} LIKE :region_raw)"
+            )
             params["region"] = f"%{root}%"
+            params["region_raw"] = f"%{request.region}%"
 
     if request.interest_topics:
         conditions.append("(LOWER(pv.title) LIKE :topic)")
@@ -283,27 +321,46 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     where = " AND ".join(conditions)
 
+    # Cross-source dedup: the same announcement is often posted on several
+    # sources (305 title-identical pairs). Keep one representative per
+    # normalized title, preferring youthcenter > sbiz24 > bizinfo.
+    _sqlite_norm = (
+        "LOWER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+        "pv.title, ' ', ''), '[', ''), ']', ''), '(', ''), ')', ''))"
+    )
+    title_norm = (
+        _sqlite_norm if is_sqlite else "regexp_replace(pv.title, '[^가-힣A-Za-z0-9]', '', 'g')"
+    )
+    dedup_cte = f"""
+        SELECT pv.id, pv.title, pv.target_type, pv.announcement_url,
+               s.source_key, s.name as source_name,
+               pv.body_text, pv.raw AS raw_json, pv.collected_at,
+               ROW_NUMBER() OVER (
+                   PARTITION BY {title_norm}
+                   ORDER BY CASE s.source_key
+                                WHEN 'youthcenter' THEN 0
+                                WHEN 'sbiz24' THEN 1
+                                ELSE 2 END,
+                            pv.collected_at DESC
+               ) AS rn
+        FROM latest_policy_versions lpv
+        JOIN policy_versions pv ON pv.id = lpv.policy_version_id
+        JOIN programs p ON p.id = pv.program_id
+        JOIN sources s ON s.id = p.source_id
+        WHERE {where}
+    """
+
     with engine.connect() as conn:
-        count_sql = f"""
-            SELECT COUNT(*)
-            FROM latest_policy_versions lpv
-            JOIN policy_versions pv ON pv.id = lpv.policy_version_id
-            JOIN programs p ON p.id = pv.program_id
-            JOIN sources s ON s.id = p.source_id
-            WHERE {where}
-        """
-        total = conn.execute(text(count_sql), params).scalar_one()
+        total = conn.execute(
+            text(f"SELECT COUNT(*) FROM ({dedup_cte}) WHERE rn = 1"), params
+        ).scalar_one()
 
         sql = f"""
-            SELECT pv.id, pv.title, pv.target_type, pv.announcement_url,
-                   s.source_key, s.name as source_name,
-                   pv.body_text, pv.raw
-            FROM latest_policy_versions lpv
-            JOIN policy_versions pv ON pv.id = lpv.policy_version_id
-            JOIN programs p ON p.id = pv.program_id
-            JOIN sources s ON s.id = p.source_id
-            WHERE {where}
-            ORDER BY pv.collected_at DESC
+            SELECT id, title, target_type, announcement_url,
+                   source_key, source_name, body_text, raw_json
+            FROM ({dedup_cte})
+            WHERE rn = 1
+            ORDER BY collected_at DESC
             LIMIT :limit OFFSET :offset
         """
         params["limit"] = request.page_size
@@ -351,8 +408,12 @@ async def search(request: SearchRequest) -> SearchResponse:
                 category=category,
                 status=status,
                 agency=source_name,
+                topic=_topic_from_title(title),
                 reasons=reasons if reasons else ["조건 확인 필요"],
                 missing_info=missing_info,
+                application_deadline=_norm_yyyymmdd(
+                    _as_dict(pv_raw).get("APLY_PRD_END_YMD")
+                ),
                 announcement_url=url,
                 evidence=[
                     EvidenceRef(

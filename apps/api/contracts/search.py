@@ -6,7 +6,6 @@ Profile is never persisted; only used for the request lifecycle.
 
 from __future__ import annotations
 
-from datetime import datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, HttpUrl
@@ -43,6 +42,10 @@ class PolicyResult(BaseModel):
     category: PolicyCategory
     status: MatchStatus
     agency: str = ""
+    topic: str = Field(
+        default="기타",
+        description="Display topic derived from the title (금융·자금, 주거, ...)",
+    )
     reasons: list[str] = Field(
         default_factory=list,
         description="Why this status was assigned",
@@ -52,7 +55,10 @@ class PolicyResult(BaseModel):
         description="Fields that caused 'possible' instead of 'eligible'",
     )
     benefits: list[str] = Field(default_factory=list)
-    application_deadline: datetime | None = None
+    application_deadline: str | None = Field(
+        default=None,
+        description="Application deadline (ISO date), null when always open or unknown",
+    )
     announcement_url: HttpUrl | None = None
     evidence: list[EvidenceRef] = Field(
         default_factory=list,
