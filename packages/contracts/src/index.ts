@@ -52,6 +52,7 @@ export interface SearchProfile {
   employment_status?: string;
   income_bracket?: string;
   interest_topics?: string[];
+  is_student?: boolean;
   // Business
   is_business_owner?: boolean;
   business_start_date?: string;

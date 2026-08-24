@@ -189,6 +189,52 @@ class TestPolicyDetailEndpoint:
         assert db_client.get("/v1/policies/99999").status_code == 404
 
 
+class TestStudentEnrollment:
+    def test_scholarship_title_requires_student(self) -> None:
+        raw = {"title": "국가근로장학금"}  # no structured conditions
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1988-01-01"))
+        assert status == MatchStatus.INELIGIBLE
+        assert "재학생" in reasons[0]
+
+    def test_scholarship_passes_for_student(self) -> None:
+        raw = {"title": "국가근로장학금"}
+        req = SearchRequest(birth_date="1996-05-01", is_student=True)
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert status != MatchStatus.INELIGIBLE
+        assert any("학적 조건 충족" in r for r in reasons)
+
+    def test_education_field_with_enrollment(self) -> None:
+        raw = {"QLFC_ACBG_NM": "대학 재학,대졸 예정"}
+        status, _, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status == MatchStatus.INELIGIBLE
+
+    def test_education_field_unrestricted_does_not_require(self) -> None:
+        raw = {"QLFC_ACBG_NM": "제한없음", "title": "청년 일자리 지원"}
+        status, _, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status != MatchStatus.INELIGIBLE
+
+
+class TestIncomeEvaluation:
+    def test_bracket_within_cap_is_eligible(self) -> None:
+        raw = {"EARN_MAX_AMT": "6000"}
+        req = SearchRequest(birth_date="1996-05-01", income_bracket="5000만원 이하")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert any("소득 조건 충족" in r for r in reasons)
+
+    def test_bracket_over_cap_is_ineligible(self) -> None:
+        raw = {"EARN_MAX_AMT": "4000"}
+        req = SearchRequest(birth_date="1996-05-01", income_bracket="5000만원 이하")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert status == MatchStatus.INELIGIBLE
+        assert "소득 초과" in reasons[0]
+
+    def test_missing_bracket_becomes_missing_info(self) -> None:
+        raw = {"EARN_MAX_AMT": "5000"}
+        status, _, missing = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status == MatchStatus.POSSIBLE
+        assert missing and "소득 정보" in missing[0]
+
+
 class TestRegionSummary:
     def test_nationwide_enumeration_collapses_to_전국(self) -> None:
         entries = [f"서울특별시 {gu}구" for gu in ("종로", "중구", "용산")]

@@ -151,6 +151,30 @@ def _topic_from_title(title: str) -> str:
     return "기타"
 
 
+# Form options → 연소득 만원 upper bound, matched against EARN_MAX_AMT.
+# Bounds follow the measured source distribution (1,200–10,000만원 caps).
+_INCOME_BRACKET_WON = {
+    "3000만원 이하": 3000,
+    "5000만원 이하": 5000,
+    "7000만원 이하": 7000,
+    "8000만원 이상": 8000,
+}
+
+_STUDENT_TITLE_RE = re.compile(r"장학|학자금|등록금")
+
+
+def _required_enrollment(raw: dict[str, Any]) -> bool:
+    """True when the policy requires current student enrollment."""
+    edu = str(raw.get("QLFC_ACBG_NM", "") or "").strip()
+    if edu and "재학" in edu:
+        return True
+    # Title heuristic for scholarships whose structured condition is just
+    # '자세히보기 참고' (age sent as 0~99999) — these target students.
+    return bool(
+        (not edu or edu == "제한없음") and _STUDENT_TITLE_RE.search(raw.get("title", ""))
+    )
+
+
 def _summarize_region(stdg: str) -> str | None:
     """Collapse a comma-joined district list into a human summary.
 
@@ -300,13 +324,31 @@ def _evaluate_eligibility(
         else:
             missing.append(f"고용 상태 ({', '.join(allowed_employment)})")
 
-    # Income check
+    # Student status — QLFC_ACBG_NM lists required education; entries with
+    # 재학 require current enrollment. 장학금/학자금 titles with no structured
+    # condition still target students (소스가 '자세히보기 참고' 문장뿐).
+    enrollment = _required_enrollment(raw)
+    if enrollment:
+        if request.is_student:
+            reasons.append("학적 조건 충족 (재학생)")
+        else:
+            return MatchStatus.INELIGIBLE, ["대학(원) 재학생 대상 — 재학생이 아니면 신청 불가"], []
+
+    # Income check — compare the typed 만원-unit bracket against EARN_MAX_AMT.
     earn_max = _clean_income(raw.get("EARN_MAX_AMT"))
     if earn_max:
-        if request.income_bracket:
-            reasons.append("소득 조건 확인 필요")
+        bracket = _INCOME_BRACKET_WON.get(request.income_bracket or "")
+        if bracket is not None:
+            if bracket <= int(earn_max):
+                reasons.append(f"소득 조건 충족 (연소득 {int(earn_max):,}만원 이하)")
+            else:
+                return (
+                    MatchStatus.INELIGIBLE,
+                    [f"소득 초과 (연소득 {int(earn_max):,}만원 이하 대상)"],
+                    [],
+                )
         else:
-            missing.append("소득 정보")
+            missing.append(f"소득 정보 (연소득 {int(earn_max):,}만원 이하)")
 
     # Determine final status
     if missing:
@@ -421,6 +463,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         raw_fields = _as_dict(row[7])
         if body_text := row[6]:
             raw_fields.setdefault("body_text", body_text[:2000])
+        raw_fields.setdefault("title", row[1])
         status, _, _ = _evaluate_eligibility(raw_fields, request)
         allowed = _employment_allowed(raw_fields)
         targets_user = 1 if (user_token and user_token in allowed) else 0
@@ -443,6 +486,7 @@ async def search(request: SearchRequest) -> SearchResponse:
         raw_fields: dict[str, Any] = _as_dict(pv_raw)
         if body_text:
             raw_fields.setdefault("body_text", body_text[:2000])
+        raw_fields.setdefault("title", title)
         status, reasons, missing_info = _evaluate_eligibility(raw_fields, request)
 
         results.append(
