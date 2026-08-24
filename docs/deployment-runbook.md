@@ -43,7 +43,7 @@ Internet → [web:3000] → Next.js SSR
 - **web**: Next.js (standalone repo `../policy-search-frontend`), port 3000
 - **api**: FastAPI, port 8000
 - **db**: PostgreSQL 16 + pgvector, internal network only
-- **ingest**: daily scheduler (`scripts/ingest_scheduler.py`, `INGEST_INTERVAL_DAYS`, default 1), resource-limited (1 CPU, 1 GB RAM)
+- **ingest**: fixed-time scheduler (`scripts/ingest_scheduler.py`, `INGEST_TIMES`, default `11:00,19:00` local time), resource-limited (1 CPU, 1 GB RAM)
 
 ## Backup
 
