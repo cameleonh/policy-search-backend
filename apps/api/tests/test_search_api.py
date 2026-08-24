@@ -194,11 +194,11 @@ class TestStudentEnrollment:
         raw = {"title": "국가근로장학금"}  # no structured conditions
         status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1988-01-01"))
         assert status == MatchStatus.INELIGIBLE
-        assert "재학생" in reasons[0]
+        assert "학적" in reasons[0] or "재학" in reasons[0]
 
-    def test_scholarship_passes_for_student(self) -> None:
+    def test_scholarship_passes_for_undergrad(self) -> None:
         raw = {"title": "국가근로장학금"}
-        req = SearchRequest(birth_date="1996-05-01", is_student=True)
+        req = SearchRequest(birth_date="1996-05-01", student_level="undergrad")
         status, reasons, _ = _evaluate_eligibility(raw, req)
         assert status != MatchStatus.INELIGIBLE
         assert any("학적 조건 충족" in r for r in reasons)
@@ -210,6 +210,47 @@ class TestStudentEnrollment:
 
     def test_education_field_unrestricted_does_not_require(self) -> None:
         raw = {"QLFC_ACBG_NM": "제한없음", "title": "청년 일자리 지원"}
+        status, _, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status != MatchStatus.INELIGIBLE
+
+
+class TestStudentLevelDiscrimination:
+    """대학(학부) vs 대학원(석·박사) — QLFC_ACBG_NM 어휘 기반 구분."""
+
+    def test_grad_only_policy_rejects_undergrad(self) -> None:
+        raw = {"QLFC_ACBG_NM": "석·박사"}
+        req = SearchRequest(birth_date="1996-05-01", student_level="undergrad")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert status == MatchStatus.INELIGIBLE
+        assert "석·박사" in reasons[0]
+
+    def test_grad_only_policy_accepts_grad(self) -> None:
+        raw = {"QLFC_ACBG_NM": "석·박사"}
+        req = SearchRequest(birth_date="1996-05-01", student_level="grad")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert any("석·박사" in r and "충족" in r for r in reasons)
+
+    def test_grad_student_also_satisfies_undergrad_tokens(self) -> None:
+        # 대학원생은 학사 완료자 — '대학 재학,대졸 예정,대학 졸업' 정책도 충족
+        raw = {"QLFC_ACBG_NM": "대학 재학,대졸 예정,대학 졸업"}
+        req = SearchRequest(birth_date="1996-05-01", student_level="grad")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert any("학적 조건 충족" in r for r in reasons)
+
+    def test_mixed_tokens_accept_undergrad(self) -> None:
+        raw = {"QLFC_ACBG_NM": "대학 재학,석·박사"}
+        req = SearchRequest(birth_date="1996-05-01", student_level="undergrad")
+        status, reasons, _ = _evaluate_eligibility(raw, req)
+        assert any("대학 재학" in r and "충족" in r for r in reasons)
+
+    def test_non_student_blocked_by_grad_policy(self) -> None:
+        raw = {"QLFC_ACBG_NM": "석·박사"}
+        status, _, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status == MatchStatus.INELIGIBLE
+
+    def test_non_enrollment_tokens_do_not_block_non_student(self) -> None:
+        # 졸업 요건은 재학 여부와 무관 — blocker가 아니라 통과
+        raw = {"QLFC_ACBG_NM": "고교 졸업,대학 졸업"}
         status, _, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
         assert status != MatchStatus.INELIGIBLE
 

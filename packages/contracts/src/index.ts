@@ -52,7 +52,8 @@ export interface SearchProfile {
   employment_status?: string;
   income_bracket?: string;
   interest_topics?: string[];
-  is_student?: boolean;
+  /** null = 비재학, "undergrad" = 대학 재학, "grad" = 대학원(석·박사) 재학 */
+  student_level?: "undergrad" | "grad" | null;
   // Business
   is_business_owner?: boolean;
   business_start_date?: string;

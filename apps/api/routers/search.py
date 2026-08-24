@@ -162,17 +162,56 @@ _INCOME_BRACKET_WON = {
 
 _STUDENT_TITLE_RE = re.compile(r"장학|학자금|등록금")
 
+# QLFC_ACBG_NM enumerates education tokens; the vocabulary observed in the
+# dataset is: {고졸 예정, 고교 졸업, 고교 재학, 고졸 미만, 대학 재학, 대졸 예정,
+# 대학 졸업, 석·박사, 기타}. 석·박사 is how the data says "대학원".
+_UNDERGRAD_TOKENS = {"대학 재학", "대졸 예정"}
+_GRAD_TOKENS = {"석·박사"}
 
-def _required_enrollment(raw: dict[str, Any]) -> bool:
-    """True when the policy requires current student enrollment."""
+
+def _required_edu_tokens(raw: dict[str, Any]) -> set[str] | None:
+    """Education tokens the policy demands, or None when unrestricted.
+
+    Titles matching 장학/학자금/등록금 with no structured condition target
+    undergrad-level students (source lists only '자세히보기 참고').
+    """
     edu = str(raw.get("QLFC_ACBG_NM", "") or "").strip()
-    if edu and "재학" in edu:
-        return True
-    # Title heuristic for scholarships whose structured condition is just
-    # '자세히보기 참고' (age sent as 0~99999) — these target students.
-    return bool(
-        (not edu or edu == "제한없음") and _STUDENT_TITLE_RE.search(raw.get("title", ""))
-    )
+    if edu and edu != "제한없음":
+        return {t.strip() for t in edu.split(",") if t.strip()}
+    if _STUDENT_TITLE_RE.search(raw.get("title", "")):
+        return set(_UNDERGRAD_TOKENS)
+    return None
+
+
+def _evaluate_student(
+    request: SearchRequest, raw: dict[str, Any]
+) -> tuple[bool, list[str], list[str]]:
+    """(blocked, reasons, blockers) for the education requirement.
+
+    - 비재학(None) + 재학/석박사 요구 → blocked
+    - undergrad → 대학 재학/대졸 예정 충족; 석·박사-only 정책은 blocked
+    - grad → 석·박사 충족 + 학부 과정 조건도 충족(석사 이상은 학사 완료자)
+    """
+    tokens = _required_edu_tokens(raw)
+    if not tokens:
+        return False, [], []
+    level = request.student_level
+    if level is None:
+        if tokens & (_UNDERGRAD_TOKENS | _GRAD_TOKENS):
+            wanted = ", ".join(sorted(tokens))
+            return True, [], [f"재학생 대상 (요구 학적: {wanted}) — 재학생이 아니면 신청 불가"]
+        return False, [], []
+
+    if level == "grad":
+        hit = sorted(tokens & (_GRAD_TOKENS | _UNDERGRAD_TOKENS))
+        if hit:
+            return False, [f"학적 조건 충족 ({', '.join(hit)})"], []
+    else:
+        hit = sorted(tokens & _UNDERGRAD_TOKENS)
+        if hit:
+            return False, [f"학적 조건 충족 ({', '.join(hit)})"], []
+    wanted = ", ".join(sorted(tokens))
+    return True, [], [f"학적 조건 불일치 (대상: {wanted})"]
 
 
 def _summarize_region(stdg: str) -> str | None:
@@ -324,15 +363,12 @@ def _evaluate_eligibility(
         else:
             missing.append(f"고용 상태 ({', '.join(allowed_employment)})")
 
-    # Student status — QLFC_ACBG_NM lists required education; entries with
-    # 재학 require current enrollment. 장학금/학자금 titles with no structured
-    # condition still target students (소스가 '자세히보기 참고' 문장뿐).
-    enrollment = _required_enrollment(raw)
-    if enrollment:
-        if request.is_student:
-            reasons.append("학적 조건 충족 (재학생)")
-        else:
-            return MatchStatus.INELIGIBLE, ["대학(원) 재학생 대상 — 재학생이 아니면 신청 불가"], []
+    # Student status — QLFC_ACBG_NM enumerates required education levels;
+    # 대학 재학/대졸 예정 vs 석·박사 are matched against the user's level.
+    blocked, student_reasons, student_blockers = _evaluate_student(request, raw)
+    if blocked:
+        return MatchStatus.INELIGIBLE, student_blockers, []
+    reasons.extend(student_reasons)
 
     # Income check — compare the typed 만원-unit bracket against EARN_MAX_AMT.
     earn_max = _clean_income(raw.get("EARN_MAX_AMT"))

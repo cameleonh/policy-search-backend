@@ -7,6 +7,7 @@ Profile is never persisted; only used for the request lifecycle.
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -83,9 +84,9 @@ class SearchRequest(BaseModel):
     employment_status: str | None = None
     income_bracket: str | None = None
     interest_topics: list[str] = Field(default_factory=list)
-    is_student: bool = Field(
-        default=False,
-        description="대학(원) 재학 여부 — 장학금·학자금 정책의 주요 자격 조건",
+    student_level: Literal["undergrad", "grad"] | None = Field(
+        default=None,
+        description="재학 구분 — undergrad: 대학 재학, grad: 대학원(석·박사) 재학. None이면 비재학",
     )
 
     # Business
