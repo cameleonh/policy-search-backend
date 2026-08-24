@@ -6,12 +6,13 @@ persisted to DB, cache, or logs. Includes eligibility evaluation.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import create_engine, text
 
 from apps.api.contracts.search import (
@@ -19,6 +20,7 @@ from apps.api.contracts.search import (
     EvidenceRef,
     MatchStatus,
     PolicyCategory,
+    PolicyDetail,
     PolicyResult,
     SearchRequest,
     SearchResponse,
@@ -54,6 +56,24 @@ _REGION_FULL_NAMES = {
 _AGE_RANGE_RE = re.compile(r"만?\s*(\d{1,2})\s*[~∼\-–]\s*(\d{1,2})\s*세")
 _AGE_MIN_RE = re.compile(r"만\s*(\d{1,2})\s*세\s*이상")
 _AGE_MAX_RE = re.compile(r"만\s*(\d{1,2})\s*세\s*이하")
+
+# Form options → source-native employment tokens (온통청년 EMPM_STTS_NM).
+_EMPLOYMENT_TOKEN = {
+    "미취업": "미취업자",
+    "재직중": "재직자",
+    "자영업": "자영업자",
+}
+
+
+def _employment_allowed(raw: dict[str, Any]) -> list[str]:
+    """Employment statuses the policy admits; empty = unrestricted/unknown."""
+    value = raw.get("EMPM_STTS_NM")
+    if not value:
+        return []
+    s = str(value).strip()
+    if not s or s == "제한없음":
+        return []
+    return [tok.strip() for tok in s.split(",") if tok.strip()]
 
 
 def _region_root(region: str) -> str:
@@ -109,6 +129,34 @@ def _age_bounds(raw: dict[str, Any]) -> tuple[int | None, int | None]:
     return None, None
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    """JSONB arrives as dict on psycopg; SQLite test rows arrive as str."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value:
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _norm_yyyymmdd(value: Any) -> str | None:
+    s = str(value or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s or None
+
+
+def _clean_income(value: Any) -> str | None:
+    """Normalize EARN_MAX_AMT; sources use 0/99999 sentinels for unlimited."""
+    s = str(value or "").strip()
+    if not s or s in ("0", "99999", "9999999999999"):
+        return None
+    return s
+
+
 def _get_engine() -> Any:
     global _engine
     if _engine is None:
@@ -145,7 +193,7 @@ def _evaluate_eligibility(
     if min_age is not None:
         if user_age is not None:
             if user_age < min_age:
-                return MatchStatus.POSSIBLE, [f"나이 조건 미달 (만 {min_age}세 이상 대상)"], []
+                return MatchStatus.INELIGIBLE, [f"나이 조건 미달 (만 {min_age}세 이상 대상)"], []
             reasons.append(f"나이 조건 충족 (만 {min_age}세 이상)")
         else:
             missing.append(f"나이 (만 {min_age}세 이상 확인 필요)")
@@ -153,7 +201,7 @@ def _evaluate_eligibility(
     if max_age is not None:
         if user_age is not None:
             if user_age > max_age:
-                return MatchStatus.POSSIBLE, [f"나이 초과 (만 {max_age}세 이하 대상)"], []
+                return MatchStatus.INELIGIBLE, [f"나이 초과 (만 {max_age}세 이하 대상)"], []
             reasons.append(f"나이 조건 충족 (만 {max_age}세 이하)")
         else:
             missing.append(f"나이 (만 {max_age}세 이하 확인 필요)")
@@ -169,9 +217,25 @@ def _evaluate_eligibility(
         else:
             missing.append(f"거주 지역 ({region_field})")
 
+    # Employment check — policy lists allowed statuses (comma-joined).
+    allowed_employment = _employment_allowed(raw)
+    if allowed_employment:
+        token = _EMPLOYMENT_TOKEN.get(request.employment_status or "", "")
+        if token:
+            if token in allowed_employment:
+                reasons.append(f"고용 상태 충족 ({token})")
+            else:
+                return (
+                    MatchStatus.INELIGIBLE,
+                    [f"고용 상태 불일치 (대상: {', '.join(allowed_employment)})"],
+                    [],
+                )
+        else:
+            missing.append(f"고용 상태 ({', '.join(allowed_employment)})")
+
     # Income check
-    earn_max = raw.get("EARN_MAX_AMT")
-    if earn_max and str(earn_max).strip() and str(earn_max).strip() != "0":
+    earn_max = _clean_income(raw.get("EARN_MAX_AMT"))
+    if earn_max:
         if request.income_bracket:
             reasons.append("소득 조건 확인 필요")
         else:
@@ -199,6 +263,11 @@ async def search(request: SearchRequest) -> SearchResponse:
 
     conditions = ["pv.is_valid IS NOT FALSE"]
     params: dict[str, Any] = {}
+
+    # Business-targeted announcements (참여기업 모집, 정책자금 상품 ...) are
+    # noise for individual searchers — include them only for business owners.
+    if not request.is_business_owner:
+        conditions.append("pv.target_type <> 'business'")
 
     # Titles carry the region token ([서울], (광양시), 충남형 ...), so match the
     # normalized root: 서울특별시 / 서울시 / 서울 all filter as '%서울%'.
@@ -241,6 +310,22 @@ async def search(request: SearchRequest) -> SearchResponse:
         params["offset"] = offset
         rows = conn.execute(text(sql), params).fetchall()
 
+    user_token = _EMPLOYMENT_TOKEN.get(request.employment_status or "", "")
+    _STATUS_ORDER = {MatchStatus.ELIGIBLE: 0, MatchStatus.POSSIBLE: 1, MatchStatus.INELIGIBLE: 2}
+
+    def relevance(row: Any) -> tuple[int, int]:
+        """Eligible first; policies targeting the user's employment status
+        above status-agnostic ones (재직자 검색 시 재직자 전용 정책이 먼저)."""
+        raw_fields = _as_dict(row[7])
+        if body_text := row[6]:
+            raw_fields.setdefault("body_text", body_text[:2000])
+        status, _, _ = _evaluate_eligibility(raw_fields, request)
+        allowed = _employment_allowed(raw_fields)
+        targets_user = 1 if (user_token and user_token in allowed) else 0
+        return (_STATUS_ORDER.get(status, 3), -targets_user)
+
+    rows.sort(key=relevance)
+
     results: list[PolicyResult] = []
     for row in rows:
         pv_id, title, target_type, url, source_key, source_name, body_text, pv_raw = row
@@ -253,9 +338,7 @@ async def search(request: SearchRequest) -> SearchResponse:
 
         # Eligibility evaluation — structured source fields first, body text
         # regex fallback second.
-        raw_fields: dict[str, Any] = {}
-        if isinstance(pv_raw, dict):
-            raw_fields.update(pv_raw)
+        raw_fields: dict[str, Any] = _as_dict(pv_raw)
         if body_text:
             raw_fields.setdefault("body_text", body_text[:2000])
         status, reasons, missing_info = _evaluate_eligibility(raw_fields, request)
@@ -287,4 +370,50 @@ async def search(request: SearchRequest) -> SearchResponse:
         page=request.page,
         page_size=request.page_size,
         rag_enabled=False,
+    )
+
+
+@router.get(
+    "/policies/{policy_version_id}",
+    response_model=PolicyDetail,
+    responses={404: {"model": ErrorResponse}},
+)
+async def policy_detail(policy_version_id: int) -> PolicyDetail:
+    """Structured eligibility conditions for a single policy version."""
+    engine = _get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("""
+                SELECT pv.id, pv.title, pv.announcement_url, pv.raw,
+                       s.name AS source_name
+                FROM policy_versions pv
+                JOIN programs p ON p.id = pv.program_id
+                JOIN sources s ON s.id = p.source_id
+                WHERE pv.id = :pid AND pv.is_valid IS NOT FALSE
+            """),
+            {"pid": policy_version_id},
+        ).first()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Policy version not found")
+
+    pv_id, title, url, pv_raw, source_name = row
+    raw = _as_dict(pv_raw)
+    age_min, age_max = _age_bounds(raw)
+    income_s = _clean_income(raw.get("EARN_MAX_AMT"))
+    education = str(raw.get("QLFC_ACBG_NM", "") or "").strip()
+
+    return PolicyDetail(
+        policy_version_id=pv_id,
+        policy_title=title,
+        agency=source_name,
+        announcement_url=url,
+        apply_start=_norm_yyyymmdd(raw.get("APLY_PRD_BGNG_YMD")),
+        apply_end=_norm_yyyymmdd(raw.get("APLY_PRD_END_YMD")),
+        age_min=age_min,
+        age_max=age_max,
+        income_max=income_s,
+        employment=_employment_allowed(raw),
+        region=str(raw.get("STDG_NM", "") or "").strip() or None,
+        education=education or None,
     )

@@ -15,4 +15,4 @@ RUN uv sync --no-dev
 
 ENV PYTHONPATH=/app
 
-CMD ["uv", "run", "python", "scripts/ingest_all.py"]
+CMD ["uv", "run", "python", "scripts/ingest_scheduler.py"]

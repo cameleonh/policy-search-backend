@@ -21,6 +21,7 @@ class PolicyCategory(StrEnum):
 class MatchStatus(StrEnum):
     ELIGIBLE = "eligible"
     POSSIBLE = "possible"
+    INELIGIBLE = "ineligible"
 
 
 class EvidenceRef(BaseModel):
@@ -102,6 +103,24 @@ class SearchResponse(BaseModel):
         default=False,
         description="Whether RAG explanations were generated",
     )
+
+
+class PolicyDetail(BaseModel):
+    """GET /v1/policies/{policy_version_id} response — structured conditions
+    from the stored source raw fields."""
+
+    policy_version_id: int
+    policy_title: str
+    agency: str = ""
+    announcement_url: HttpUrl | None = None
+    apply_start: str | None = None
+    apply_end: str | None = None
+    age_min: int | None = None
+    age_max: int | None = None
+    income_max: str | None = None
+    employment: list[str] = Field(default_factory=list)
+    region: str | None = None
+    education: str | None = None
 
 
 class ErrorResponse(BaseModel):

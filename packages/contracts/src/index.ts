@@ -7,10 +7,7 @@
 // ── Enums ─────────────────────────────────────
 
 /** Three-valued verdict shown on result cards. */
-export type MatchStatus = "eligible" | "possible";
-
-/** Legacy name kept for Badge tokens; the API never emits "ineligible". */
-export type TriState = MatchStatus | "ineligible";
+export type MatchStatus = "eligible" | "possible" | "ineligible";
 
 export type PolicyCategory = "individual" | "business" | "both";
 
@@ -70,4 +67,19 @@ export interface SearchResponse {
   page: number;
   page_size: number;
   rag_enabled: boolean;
+}
+
+export interface PolicyDetail {
+  policy_version_id: number;
+  policy_title: string;
+  agency: string;
+  announcement_url: string | null;
+  apply_start: string | null;
+  apply_end: string | null;
+  age_min: number | null;
+  age_max: number | null;
+  income_max: string | null;
+  employment: string[];
+  region: string | null;
+  education: string | null;
 }

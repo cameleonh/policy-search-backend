@@ -6,6 +6,7 @@ a live PostgreSQL instance.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Generator
 
 import pytest
@@ -21,7 +22,11 @@ from apps.api.contracts.search import (
     SearchRequest,
 )
 from apps.api.main import app
-from apps.api.routers.search import _age_bounds, _evaluate_eligibility, _region_root
+from apps.api.routers.search import (
+    _age_bounds,
+    _evaluate_eligibility,
+    _region_root,
+)
 
 
 @pytest.fixture
@@ -145,6 +150,44 @@ class TestSearchEndpoint:
         assert "SECRET_INDUSTRY" not in body_str
 
 
+class TestPolicyDetailEndpoint:
+    def test_detail_returns_structured_conditions(self, db_client: TestClient) -> None:
+        raw = json.dumps(
+            {
+                "SPRT_TRGT_MIN_AGE": "19",
+                "SPRT_TRGT_MAX_AGE": "39",
+                "EMPM_STTS_NM": "미취업자",
+                "STDG_NM": "서울특별시",
+                "APLY_PRD_BGNG_YMD": "20260801",
+                "APLY_PRD_END_YMD": "20260831",
+                "QLFC_ACBG_NM": "대졸 이하",
+            },
+            ensure_ascii=False,
+        )
+        import apps.api.routers.search as search_router
+
+        engine = search_router._engine
+        with engine.begin() as conn:
+            conn.execute(
+                text("UPDATE policy_versions SET raw = :raw WHERE id = 1"),
+                {"raw": raw},
+            )
+
+        response = db_client.get("/v1/policies/1")
+        assert response.status_code == 200
+        d = response.json()
+        assert d["policy_version_id"] == 1
+        assert d["age_min"] == 19
+        assert d["age_max"] == 39
+        assert d["employment"] == ["미취업자"]
+        assert d["apply_start"] == "2026-08-01"
+        assert d["apply_end"] == "2026-08-31"
+        assert d["education"] == "대졸 이하"
+
+    def test_detail_404_for_missing(self, db_client: TestClient) -> None:
+        assert db_client.get("/v1/policies/99999").status_code == 404
+
+
 class TestRegionRoot:
     def test_full_administrative_names_reduce_to_root(self) -> None:
         assert _region_root("서울특별시") == "서울"
@@ -184,13 +227,13 @@ class TestAgeEvaluation:
     def test_age_range_from_body_below_min(self) -> None:
         raw = {"body_text": "만 15~39세 대상"}
         status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="2015-01-01"))
-        assert status == MatchStatus.POSSIBLE
+        assert status == MatchStatus.INELIGIBLE
         assert "미달" in reasons[0]
 
     def test_age_range_from_body_above_max(self) -> None:
         raw = {"body_text": "만 15~29세 대상"}
         status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1980-01-01"))
-        assert status == MatchStatus.POSSIBLE
+        assert status == MatchStatus.INELIGIBLE
         assert "초과" in reasons[0]
 
     def test_age_constraint_without_birth_date_is_missing_info(self) -> None:
@@ -205,6 +248,42 @@ class TestAgeEvaluation:
 
     def test_sentinel_age_means_no_limit(self) -> None:
         assert _age_bounds({"SPRT_TRGT_MAX_AGE": "99999"}) == (None, None)
+
+
+class TestEmploymentEvaluation:
+    def test_matching_status_is_eligible(self) -> None:
+        raw = {"EMPM_STTS_NM": "미취업자"}
+        req = SearchRequest(employment_status="미취업")
+        status, reasons, missing = _evaluate_eligibility(raw, req)
+        assert status == MatchStatus.ELIGIBLE
+        assert "고용 상태 충족 (미취업자)" in reasons
+        assert missing == []
+
+    def test_mismatching_status_is_ineligible(self) -> None:
+        raw = {"EMPM_STTS_NM": "미취업자"}
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(employment_status="재직중"))
+        assert status == MatchStatus.INELIGIBLE
+        assert "고용 상태 불일치" in reasons[0]
+
+    def test_multi_token_list_accepts_each(self) -> None:
+        raw = {"EMPM_STTS_NM": "재직자,미취업자"}
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(employment_status="미취업"))
+        assert status == MatchStatus.ELIGIBLE
+        assert any("고용 상태 충족" in r for r in reasons)
+
+    def test_unrestricted_ignored_entirely(self) -> None:
+        raw = {"EMPM_STTS_NM": "제한없음"}
+        req = SearchRequest(employment_status="미취업")
+        status, reasons, missing = _evaluate_eligibility(raw, req)
+        assert status == MatchStatus.POSSIBLE  # no reasons → possible, not missing
+        assert reasons == []
+        assert missing == []
+
+    def test_absent_user_status_becomes_missing_info(self) -> None:
+        raw = {"EMPM_STTS_NM": "미취업자"}
+        status, _, missing = _evaluate_eligibility(raw, SearchRequest())
+        assert status == MatchStatus.POSSIBLE
+        assert missing and "고용 상태" in missing[0]
 
     def test_no_age_constraint_no_missing_info(self) -> None:
         status, _, missing = _evaluate_eligibility({"body_text": "서울 거주 청년"}, SearchRequest())
