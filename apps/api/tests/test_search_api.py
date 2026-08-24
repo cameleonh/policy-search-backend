@@ -26,6 +26,7 @@ from apps.api.routers.search import (
     _age_bounds,
     _evaluate_eligibility,
     _region_root,
+    _summarize_region,
 )
 
 
@@ -186,6 +187,29 @@ class TestPolicyDetailEndpoint:
 
     def test_detail_404_for_missing(self, db_client: TestClient) -> None:
         assert db_client.get("/v1/policies/99999").status_code == 404
+
+
+class TestRegionSummary:
+    def test_nationwide_enumeration_collapses_to_전국(self) -> None:
+        entries = [f"서울특별시 {gu}구" for gu in ("종로", "중구", "용산")]
+        entries += [f"부산광역시 {gu}구" for gu in ("서", "동", "영도")]
+        assert _summarize_region(",".join(entries * 20)) == "전국"
+
+    def test_single_province_many_districts(self) -> None:
+        cities = ("청주시", "충주시", "제천시", "보은군", "옥천군", "영동군")
+        stdg = ",".join(f"충청북도 {city}" for city in cities)
+        assert _summarize_region(stdg) == "충청북도 청주시 외 5곳"
+
+    def test_small_list_shows_districts(self) -> None:
+        assert _summarize_region("광주광역시 동구, 광주광역시 서구") == "동구 · 서구"
+
+    def test_multi_province_summary(self) -> None:
+        stdg = "서울특별시 강남구, 서울특별시 송파구, 부산광역시 해운대구"
+        assert _summarize_region(stdg) == "서울특별시 2곳 · 부산광역시 1곳"
+
+    def test_empty(self) -> None:
+        assert _summarize_region("") is None
+        assert _summarize_region(" , ") is None
 
 
 class TestRegionRoot:

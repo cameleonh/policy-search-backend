@@ -151,6 +151,41 @@ def _topic_from_title(title: str) -> str:
     return "기타"
 
 
+def _summarize_region(stdg: str) -> str | None:
+    """Collapse a comma-joined district list into a human summary.
+
+    STDG_NM enumerates every covered 시·군·구; a policy spanning all of them
+    is effectively 전국 and must not be rendered as 250 entries.
+    """
+    entries = [e.strip() for e in stdg.split(",") if e.strip()]
+    if not entries:
+        return None
+
+    def root_of(entry: str) -> str:
+        for name in _REGION_FULL_NAMES:
+            if entry.startswith(name):
+                return name
+        first = entry.split(" ")[0]
+        return first if first.endswith(("시", "도")) else entry
+
+    if len(entries) >= 100:
+        return "전국"
+
+    roots: dict[str, list[str]] = {}
+    for entry in entries:
+        roots.setdefault(root_of(entry), []).append(entry)
+
+    if len(roots) > 1:
+        parts = [f"{root} {len(items)}곳" for root, items in roots.items()]
+        return " · ".join(parts)
+
+    root, items = next(iter(roots.items()))
+    if len(items) <= 5:
+        return " · ".join(i.replace(root + " ", "") for i in items)
+    first = items[0].replace(root + " ", "")
+    return f"{root} {first} 외 {len(items) - 1}곳"
+
+
 def _as_dict(value: Any) -> dict[str, Any]:
     """JSONB arrives as dict on psycopg; SQLite test rows arrive as str."""
     if isinstance(value, dict):
@@ -240,13 +275,14 @@ def _evaluate_eligibility(
     # Region check
     region_field = raw.get("STDG_NM", "")
     if region_field and str(region_field).strip() and str(region_field).strip() != "전국":
+        summary = _summarize_region(str(region_field))
         if request.region:
             if request.region in str(region_field):
                 reasons.append(f"지역 조건 충족 ({request.region})")
             else:
                 pass  # Region mismatch but not hard fail — may be "전국" policy
         else:
-            missing.append(f"거주 지역 ({region_field})")
+            missing.append(f"거주 지역 ({summary})")
 
     # Employment check — policy lists allowed statuses (comma-joined).
     allowed_employment = _employment_allowed(raw)
@@ -484,6 +520,6 @@ async def policy_detail(policy_version_id: int) -> PolicyDetail:
         age_max=age_max,
         income_max=income_s,
         employment=_employment_allowed(raw),
-        region=str(raw.get("STDG_NM", "") or "").strip() or None,
+        region=_summarize_region(str(raw.get("STDG_NM", "") or "")),
         education=education or None,
     )
