@@ -210,6 +210,15 @@ def _evaluate_eligibility(
         except ValueError:
             pass
 
+    # Service-level age guard: this platform targets 청년/소상공인. Profiles
+    # outside 만 15–64 cannot be eligible for *any* policy here — even ones
+    # with no explicit age condition — preventing e.g. an 11-year-old getting
+    # "지원 가능" on scholarships with no stated age limit.
+    if user_age is not None and not (15 <= user_age <= 64):
+        return MatchStatus.INELIGIBLE, [
+            f"서비스 대상 연령 아님 (만 15~64세 대상, 입력 만 {user_age}세)"
+        ], []
+
     min_age, max_age = _age_bounds(raw)
 
     if min_age is not None:

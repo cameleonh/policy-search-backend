@@ -228,7 +228,7 @@ class TestAgeEvaluation:
         raw = {"body_text": "만 15~39세 대상"}
         status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="2015-01-01"))
         assert status == MatchStatus.INELIGIBLE
-        assert "미달" in reasons[0]
+        assert "대상 연령" in reasons[0]  # service guard fires before range check
 
     def test_age_range_from_body_above_max(self) -> None:
         raw = {"body_text": "만 15~29세 대상"}
@@ -284,6 +284,24 @@ class TestEmploymentEvaluation:
         status, _, missing = _evaluate_eligibility(raw, SearchRequest())
         assert status == MatchStatus.POSSIBLE
         assert missing and "고용 상태" in missing[0]
+
+    def test_service_age_guard_blocks_minors(self) -> None:
+        raw = {"body_text": "서울 거주 청년"}  # no age condition at all
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="2015-01-01"))
+        assert status == MatchStatus.INELIGIBLE
+        assert "대상 연령" in reasons[0]
+
+    def test_service_age_guard_blocks_seniors(self) -> None:
+        status, reasons, _ = _evaluate_eligibility(
+            {"body_text": "제한없음"}, SearchRequest(birth_date="1950-01-01")
+        )
+        assert status == MatchStatus.INELIGIBLE
+        assert "대상 연령" in reasons[0]
+
+    def test_service_age_guard_passes_working_age(self) -> None:
+        raw = {"body_text": "서울 거주 청년"}
+        status, _, missing = _evaluate_eligibility(raw, SearchRequest(birth_date="1996-05-01"))
+        assert status != MatchStatus.INELIGIBLE
 
     def test_no_age_constraint_no_missing_info(self) -> None:
         status, _, missing = _evaluate_eligibility({"body_text": "서울 거주 청년"}, SearchRequest())

@@ -1,0 +1,111 @@
+{
+  "version": "2026-08-24.1",
+  "description": "Fixed evaluation set for the policy search verdict engine. Each case pairs a typed profile with expected search-level invariants (verdict distribution bounds and, where anchored, per-title verdicts). Anchored titles were hand-verified against the raw source fields on 2026-08-24.",
+  "cases": [
+    {
+      "id": "youth-seoul-unemployed",
+      "name": "96년생 서울 미취업 (대표 청년 프로필)",
+      "profile": {
+        "birth_date": "1996-05-01",
+        "region": "서울특별시",
+        "employment_status": "미취업",
+        "income_bracket": "5000만원 이하"
+      },
+      "expect": {
+        "total_min": 5,
+        "max_ineligible_ratio": 0.5,
+        "anchored_verdicts": [
+          { "title_contains": "사회연대경제 청년일경험", "status": "eligible" },
+          { "title_contains": "k-뉴딜 아카데미", "status": "eligible" }
+        ],
+        "all_have_deadline_or_null": true,
+        "all_have_topic": true,
+        "no_business_category": true
+      }
+    },
+    {
+      "id": "youth-seoul-employed",
+      "name": "96년생 서울 재직중 (고용상태 반전 확인)",
+      "profile": {
+        "birth_date": "1996-05-01",
+        "region": "서울특별시",
+        "employment_status": "재직중"
+      },
+      "expect": {
+        "total_min": 3,
+        "results_differ_from": "youth-seoul-unemployed"
+      }
+    },
+    {
+      "id": "older-seoul-employed",
+      "name": "80년생 서울 재직중 (나이 초과 inel예상 다수)",
+      "profile": {
+        "birth_date": "1980-01-01",
+        "region": "서울특별시",
+        "employment_status": "재직중"
+      },
+      "expect": {
+        "total_min": 3,
+        "ineligible_min": 5,
+        "anchored_verdicts": [
+          { "title_contains": "사회연대경제 청년일경험", "status": "ineligible" }
+        ]
+      }
+    },
+    {
+      "id": "too-young",
+      "name": "2015년생 (서비스 연령 가드)",
+      "profile": {
+        "birth_date": "2015-01-01",
+        "region": "서울특별시"
+      },
+      "expect": {
+        "eligible_max": 0,
+        "ineligible_min": 5
+      }
+    },
+    {
+      "id": "empty-profile",
+      "name": "빈 프로필 (전체 탐색, 전부 possible 이하)",
+      "profile": {},
+      "expect": {
+        "total_min": 200,
+        "eligible_max": 0
+      }
+    },
+    {
+      "id": "region-chungbuk",
+      "name": "충북 거주 청년 (지역 표기 변형 수용)",
+      "profile": {
+        "birth_date": "1996-05-01",
+        "region": "충청북도"
+      },
+      "expect": {
+        "total_min": 1,
+        "all_titles_or_fields_match_chungbuk": true
+      }
+    },
+    {
+      "id": "business-owner",
+      "name": "소상공인 사업자 (business 공고 포함)",
+      "profile": {
+        "is_business_owner": true,
+        "business_region": "서울특별시"
+      },
+      "expect": {
+        "total_min": 1,
+        "includes_business_category": true
+      }
+    },
+    {
+      "id": "deadline-freshness",
+      "name": "마감 신선도 (노출 결과는 전부 마감 안 지난)",
+      "profile": {
+        "region": "서울특별시"
+      },
+      "expect": {
+        "all_deadlines_not_past": true
+      }
+    }
+  ]
+}
