@@ -55,7 +55,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # Ingest worker — weekly scheduler, has archive repo write token
+  # Ingest worker — daily scheduler, has archive repo write token
   ingest:
     build:
       context: .
@@ -67,7 +67,7 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://policy:${POSTGRES_PASSWORD:-policy}@db:5432/policy_search
       ARCHIVE_GITHUB_TOKEN: ${ARCHIVE_GITHUB_TOKEN}
-      INGEST_INTERVAL_DAYS: ${INGEST_INTERVAL_DAYS:-7}
+      INGEST_INTERVAL_DAYS: ${INGEST_INTERVAL_DAYS:-1}
     deploy:
       resources:
         limits:

@@ -19,6 +19,8 @@ cp .env.example .env
 # Edit .env: set POSTGRES_PASSWORD, ARCHIVE_GITHUB_TOKEN
 
 # 3. Start services
+#    web builds from ../policy-search-frontend (contracts delivered via the
+#    named build context). ingest runs the weekly scheduler by default.
 docker compose up -d
 
 # 4. Run database migrations
@@ -38,10 +40,10 @@ Internet → [web:3000] → Next.js SSR
 [ingest]  → Weekly ingestion worker (archive token)
 ```
 
-- **web**: Next.js, port 3000
+- **web**: Next.js (standalone repo `../policy-search-frontend`), port 3000
 - **api**: FastAPI, port 8000
 - **db**: PostgreSQL 16 + pgvector, internal network only
-- **ingest**: Python worker, resource-limited (1 CPU, 1 GB RAM)
+- **ingest**: daily scheduler (`scripts/ingest_scheduler.py`, `INGEST_INTERVAL_DAYS`, default 1), resource-limited (1 CPU, 1 GB RAM)
 
 ## Backup
 
@@ -85,10 +87,13 @@ curl -s -X POST http://localhost:8000/v1/search \
   -H "Content-Type: application/json" \
   -d '{"region": "서울특별시"}' | jq .total
 
-# 3. Manual ingestion trigger (if implemented)
-# docker compose exec ingest python -m workers.ingest.main
+# 3. Detail smoke (id from the search above)
+curl -s http://localhost:8000/v1/policies/1 | jq .policy_title
 
-# 4. Service restart verification
+# 4. Manual ingestion (outside the daily schedule)
+# docker compose run --rm ingest uv run python scripts/ingest_all.py
+
+# 5. Service restart verification
 docker compose restart
 sleep 10
 curl -s http://localhost:8000/health | jq .status  # → "ok"

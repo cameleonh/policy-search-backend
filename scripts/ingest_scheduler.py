@@ -1,6 +1,6 @@
-"""Weekly ingestion scheduler — the ingest container's long-running CMD.
+"""Scheduled ingestion loop — the ingest container's long-running CMD.
 
-Runs scripts/ingest_all.main() on a fixed interval (default 7 days) and keeps
+Runs scripts/ingest_all.main() on a fixed interval (default: daily) and keeps
 running across cycles; a failed cycle is logged and retried on the next tick.
 One-shot ingestion is still available via:
 
@@ -15,7 +15,7 @@ import traceback
 
 from scripts.ingest_all import main as run_ingest
 
-_INTERVAL_DAYS = float(os.environ.get("INGEST_INTERVAL_DAYS", "7"))
+_INTERVAL_DAYS = float(os.environ.get("INGEST_INTERVAL_DAYS", "1"))
 
 
 def main() -> None:

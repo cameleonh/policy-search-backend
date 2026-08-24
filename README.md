@@ -35,23 +35,28 @@ pnpm build
 ```
 policy-search-backend/
 ├── apps/
-│   ├── web/                 Next.js + TypeScript web UI
 │   └── api/                 FastAPI search and operations API
 ├── workers/
-│   ├── ingest/              Weekly source ingestion (Python)
+│   ├── ingest/              Scheduled source ingestion (Python)
 │   ├── document-extract/    Kordoc document conversion (Node.js)
 │   └── normalize/           Policy / eligibility normalization (Python)
 ├── packages/
-│   ├── contracts/           Shared TypeScript types (cross-service contracts)
+│   ├── contracts/           Shared TypeScript types (mirror of the Python wire contracts)
 │   ├── contracts-py/        Shared Python Pydantic models
 │   └── matching/            Deterministic three-valued rule evaluator (Python)
+├── scripts/
+│   ├── ingest.py            One-shot 온통청년 ingestion
+│   ├── ingest_all.py        One-shot all-source ingestion
+│   └── ingest_scheduler.py  Long-running weekly scheduler (ingest container CMD)
 ├── db/
 │   ├── base.py              SQLAlchemy declarative base
 │   ├── enums.py             Shared Python enums (mirror DB CHECK constraints)
-│   ├── models.py            SQLAlchemy ORM models (13 tables)
-│   ├── migrations/          Alembic migrations
+│   ├── models.py            SQLAlchemy ORM models
+│   ├── migrations/          Alembic migrations (0001–0005; 0005 adds policy_versions.raw JSONB)
 │   │   └── alembic/         env.py, script template, versions/
 │   └── views/               PostgreSQL views (latest_policy_versions in migration)
+├── docs/
+│   └── deployment-runbook.md
 ├── tasks/
 │   ├── prd-policy-search-platform.md
 │   └── github-issue-plan.md
@@ -100,6 +105,36 @@ DATABASE_URL=postgresql+psycopg://user:pass@localhost:5432/policy_search \
 
 The `latest_policy_versions` view returns the most recent valid version per
 program.
+
+## Search & eligibility evaluation
+
+`POST /v1/search` (apps/api/routers/search.py) evaluates every candidate
+against the stored source-native structured fields (`policy_versions.raw`,
+JSONB) that the ingest adapters preserve from each source listing:
+
+| Condition | Source fields | Verdict behavior |
+| --------- | ------------- | ---------------- |
+| Region | typed 시도 → normalized root (`서울특별시`/`서울시` → `서울`, `충청북도` → `충북`); matches titles | no match root → unfiltered |
+| Age | `SPRT_TRGT_MIN_AGE` / `SPRT_TRGT_MAX_AGE`, fallback regex on `body_text` | out of range → **ineligible**; birth_date blank → missing_info |
+| Employment | `EMPM_STTS_NM` (쉼표 리스트, `제한없음` = unrestricted); form values map 미취업→미취업자, 재직중→재직자, 자영업→자영업자 | mismatch → **ineligible**; blank → missing_info |
+| Income | `EARN_MAX_AMT` (만원 units; `0`/`99999` sentinels = unlimited) | shows 확인 필요 / missing_info |
+
+Additional behaviors:
+
+- Announcements with `target_type = 'business'` are excluded unless
+  `is_business_owner` is set (참여기업 모집 등 are individual-search noise).
+- Results are ranked: `eligible` first, then policies explicitly targeting
+  the user's employment status above status-agnostic ones.
+- `GET /v1/policies/{policy_version_id}` returns the structured conditions
+  (apply period, age, income, employment, region, education) for the detail
+  view.
+- Sentinels are normalized, never surfaced: age `99999`, income `0`/`99999`
+  mean "no limit".
+- The search profile is stateless — never persisted, cached, or logged.
+
+The Python contracts in `apps/api/contracts/search.py` are the source of
+truth for the wire format; `packages/contracts` (TypeScript) mirrors them
+for the standalone frontend (`../policy-search-frontend`).
 
 ## CI
 
