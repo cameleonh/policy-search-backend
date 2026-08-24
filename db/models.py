@@ -154,6 +154,7 @@ class PolicyVersion(Base):
     content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     target_type: Mapped[str] = mapped_column(String(20), nullable=False)
     raw_html: Mapped[str | None] = mapped_column(Text)
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     announcement_url: Mapped[str] = mapped_column(Text, nullable=False)
     collected_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

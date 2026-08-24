@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import UTC, datetime
 
@@ -79,6 +80,19 @@ def ingest_youthcenter(engine: Engine) -> None:
             ).first()
 
             if existing:
+                if rec.raw:
+                    conn.execute(
+                        text("""
+                        UPDATE policy_versions SET raw = CAST(:raw AS jsonb)
+                        WHERE program_id = :pid AND content_sha256 = :sha
+                          AND raw IS NULL
+                    """),
+                        {
+                            "raw": json.dumps(rec.raw, ensure_ascii=False),
+                            "pid": program_id,
+                            "sha": content_sha,
+                        },
+                    )
                 skipped += 1
                 continue
 
@@ -97,9 +111,10 @@ def ingest_youthcenter(engine: Engine) -> None:
                 text("""
                 INSERT INTO policy_versions
                     (program_id, version_number, title, summary, body_text,
-                     content_sha256, target_type, announcement_url, collected_at, is_valid)
+                     content_sha256, target_type, announcement_url, collected_at,
+                     is_valid, raw)
                 VALUES (:pid, :vn, :title, NULL, NULL,
-                        :sha, :tt, :url, NOW(), true)
+                        :sha, :tt, :url, NOW(), true, CAST(:raw AS jsonb))
             """),
                 {
                     "pid": program_id,
@@ -108,6 +123,7 @@ def ingest_youthcenter(engine: Engine) -> None:
                     "sha": content_sha,
                     "tt": target,
                     "url": rec.canonical_url,
+                    "raw": json.dumps(rec.raw, ensure_ascii=False) if rec.raw else None,
                 },
             )
             inserted_versions += 1
@@ -120,7 +136,8 @@ def ingest_youthcenter(engine: Engine) -> None:
     with engine.connect() as conn:
         total = conn.execute(
             text(
-                "SELECT COUNT(*) FROM policy_versions WHERE program_id IN (SELECT id FROM programs WHERE source_id = :sid)"
+                "SELECT COUNT(*) FROM policy_versions "
+                "WHERE program_id IN (SELECT id FROM programs WHERE source_id = :sid)"
             ),
             {"sid": source_id},
         ).scalar_one()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 
 from sqlalchemy import create_engine, text
@@ -63,6 +64,21 @@ def insert_records(
         ).first()
 
         if existing:
+            # Same content snapshot: backfill structured fields dropped by
+            # earlier ingest runs, then skip.
+            if rec.raw:
+                conn.execute(
+                    text("""
+                    UPDATE policy_versions SET raw = CAST(:raw AS jsonb)
+                    WHERE program_id = :pid AND content_sha256 = :sha
+                      AND raw IS NULL
+                """),
+                    {
+                        "raw": json.dumps(rec.raw, ensure_ascii=False),
+                        "pid": program_id,
+                        "sha": content_sha,
+                    },
+                )
             skipped += 1
             continue
 
@@ -78,8 +94,9 @@ def insert_records(
             text("""
             INSERT INTO policy_versions
                 (program_id, version_number, title, content_sha256,
-                 target_type, announcement_url, collected_at, is_valid)
-            VALUES (:pid, :vn, :title, :sha, :tt, :url, NOW(), true)
+                 target_type, announcement_url, collected_at, is_valid, raw)
+            VALUES (:pid, :vn, :title, :sha, :tt, :url, NOW(), true,
+                    CAST(:raw AS jsonb))
         """),
             {
                 "pid": program_id,
@@ -88,6 +105,7 @@ def insert_records(
                 "sha": content_sha,
                 "tt": target_type,
                 "url": rec.canonical_url,
+                "raw": json.dumps(rec.raw, ensure_ascii=False) if rec.raw else None,
             },
         )
         inserted += 1

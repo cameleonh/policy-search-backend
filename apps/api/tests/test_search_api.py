@@ -7,7 +7,6 @@ a live PostgreSQL instance.
 from __future__ import annotations
 
 from collections.abc import Generator
-from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -22,10 +21,11 @@ from apps.api.contracts.search import (
     SearchRequest,
 )
 from apps.api.main import app
+from apps.api.routers.search import _age_bounds, _evaluate_eligibility, _region_root
 
 
 @pytest.fixture
-def db_client() -> TestClient:
+def db_client() -> Generator[TestClient, None, None]:
     """Create a test client with an in-memory SQLite database."""
     engine = create_engine(
         "sqlite://", echo=False, connect_args={"check_same_thread": False}, poolclass=StaticPool
@@ -33,33 +33,47 @@ def db_client() -> TestClient:
     with engine.begin() as conn:
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS sources (id INTEGER PRIMARY KEY, source_key TEXT UNIQUE, name TEXT, url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+                "CREATE TABLE IF NOT EXISTS sources ("
+                "id INTEGER PRIMARY KEY, source_key TEXT UNIQUE, name TEXT, url TEXT, "
+                "created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
             )
         )
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS programs (id INTEGER PRIMARY KEY, source_id INTEGER, remote_id TEXT, canonical_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
+                "CREATE TABLE IF NOT EXISTS programs ("
+                "id INTEGER PRIMARY KEY, source_id INTEGER, remote_id TEXT, "
+                "canonical_url TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP)"
             )
         )
         conn.execute(
             text(
-                "CREATE TABLE IF NOT EXISTS policy_versions (id INTEGER PRIMARY KEY, program_id INTEGER, version_number INTEGER, title TEXT, content_sha256 TEXT, target_type TEXT, announcement_url TEXT, body_text TEXT, collected_at TEXT DEFAULT CURRENT_TIMESTAMP, is_valid BOOLEAN DEFAULT 1)"
+                "CREATE TABLE IF NOT EXISTS policy_versions ("
+                "id INTEGER PRIMARY KEY, program_id INTEGER, version_number INTEGER, "
+                "title TEXT, content_sha256 TEXT, target_type TEXT, "
+                "announcement_url TEXT, body_text TEXT, raw TEXT, "
+                "collected_at TEXT DEFAULT CURRENT_TIMESTAMP, is_valid BOOLEAN DEFAULT 1)"
             )
         )
 
         conn.execute(
             text(
-                "INSERT INTO sources (id, source_key, name, url) VALUES (1, 'youthcenter', '온통청년', 'https://youthcenter.go.kr')"
+                "INSERT INTO sources (id, source_key, name, url) "
+                "VALUES (1, 'youthcenter', '온통청년', 'https://youthcenter.go.kr')"
             )
         )
         conn.execute(
             text(
-                "INSERT INTO programs (id, source_id, remote_id, canonical_url) VALUES (1, 1, 'P001', 'https://example.com/1')"
+                "INSERT INTO programs (id, source_id, remote_id, canonical_url) "
+                "VALUES (1, 1, 'P001', 'https://example.com/1')"
             )
         )
         conn.execute(
             text(
-                "INSERT INTO policy_versions (id, program_id, version_number, title, content_sha256, target_type, announcement_url, is_valid) VALUES (1, 1, 1, '청년 창업 지원', 'abc', 'individual', 'https://example.com/1', 1)"
+                "INSERT INTO policy_versions "
+                "(id, program_id, version_number, title, content_sha256, target_type, "
+                "announcement_url, is_valid) "
+                "VALUES (1, 1, 1, '청년 창업 지원', 'abc', 'individual', "
+                "'https://example.com/1', 1)"
             )
         )
         # Create latest view after data is inserted
@@ -129,6 +143,73 @@ class TestSearchEndpoint:
         body_str = str(body)
         assert "SECRET_REGION_VALUE" not in body_str
         assert "SECRET_INDUSTRY" not in body_str
+
+
+class TestRegionRoot:
+    def test_full_administrative_names_reduce_to_root(self) -> None:
+        assert _region_root("서울특별시") == "서울"
+        assert _region_root("부산광역시") == "부산"
+        assert _region_root("경기도") == "경기"
+
+    def test_abbreviated_provinces_map(self) -> None:
+        assert _region_root("충청북도") == "충북"
+        assert _region_root("전라남도") == "전남"
+        assert _region_root("경상북도") == "경북"
+
+    def test_colloquial_variants_agree(self) -> None:
+        assert (
+            _region_root("서울시") == _region_root("서울특별시") == _region_root(" 서울 ") == "서울"
+        )
+
+    def test_city_suffix_stripped(self) -> None:
+        assert _region_root("광양시") == "광양"
+        assert _region_root("포항시") == "포항"
+
+    def test_short_root_passthrough_and_empty(self) -> None:
+        assert _region_root("충북") == "충북"
+        assert _region_root("") == ""
+        assert _region_root("  ") == ""
+
+
+class TestAgeEvaluation:
+    def test_age_range_from_body_satisfied(self) -> None:
+        raw = {"body_text": "지원 대상: 만 15~39세 청년"}
+        status, reasons, missing = _evaluate_eligibility(
+            raw, SearchRequest(birth_date="1996-05-01")
+        )
+        assert status == MatchStatus.ELIGIBLE
+        assert reasons and "나이 조건 충족" in reasons[0]
+        assert missing == []
+
+    def test_age_range_from_body_below_min(self) -> None:
+        raw = {"body_text": "만 15~39세 대상"}
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="2015-01-01"))
+        assert status == MatchStatus.POSSIBLE
+        assert "미달" in reasons[0]
+
+    def test_age_range_from_body_above_max(self) -> None:
+        raw = {"body_text": "만 15~29세 대상"}
+        status, reasons, _ = _evaluate_eligibility(raw, SearchRequest(birth_date="1980-01-01"))
+        assert status == MatchStatus.POSSIBLE
+        assert "초과" in reasons[0]
+
+    def test_age_constraint_without_birth_date_is_missing_info(self) -> None:
+        raw = {"body_text": "만 18세 이상 신청 가능"}
+        status, _, missing = _evaluate_eligibility(raw, SearchRequest())
+        assert status == MatchStatus.POSSIBLE
+        assert missing and "나이" in missing[0]
+
+    def test_structured_sprt_fields_take_priority(self) -> None:
+        raw = {"SPRT_TRGT_MIN_AGE": "19", "SPRT_TRGT_MAX_AGE": "39", "body_text": "만 65세 이상"}
+        assert _age_bounds(raw) == (19, 39)
+
+    def test_sentinel_age_means_no_limit(self) -> None:
+        assert _age_bounds({"SPRT_TRGT_MAX_AGE": "99999"}) == (None, None)
+
+    def test_no_age_constraint_no_missing_info(self) -> None:
+        status, _, missing = _evaluate_eligibility({"body_text": "서울 거주 청년"}, SearchRequest())
+        assert status == MatchStatus.POSSIBLE
+        assert missing == []
 
 
 class TestContracts:
