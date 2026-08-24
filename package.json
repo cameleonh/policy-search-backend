@@ -19,7 +19,7 @@
     "test:py": "uv run pytest",
     "test": "pnpm run test:ts && pnpm run test:py",
     "build": "pnpm -r build",
-    "dev:web": "pnpm --filter @policy-search/web dev",
     "dev:api": "uv run uvicorn apps.api.main:app --reload"
   }
 }
+

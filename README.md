@@ -66,7 +66,7 @@ policy-search-backend/
 ## Dependency direction
 
 ```
-packages/contracts ──────────────── apps/web
+packages/contracts ───────────────── ../policy-search-frontend (standalone repo)
                    └──────────────── workers/document-extract
 
 packages/contracts-py ───────────── apps/api

@@ -1,4 +1,3 @@
 packages:
-  - 'apps/web'
   - 'workers/document-extract'
   - 'packages/*'

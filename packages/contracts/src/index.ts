@@ -1,34 +1,18 @@
 /**
- * Shared TypeScript contracts consumed by apps/web and workers/document-extract.
- *
- * These types mirror the Python Pydantic models and the PostgreSQL schema.
+ * Shared TypeScript contracts — mirrors the Python wire contracts in
+ * `apps/api/contracts/search.py` (Pydantic, snake_case JSON). The Python
+ * models are the source of truth; keep these in sync manually.
  */
 
 // ── Enums ─────────────────────────────────────
 
-/** Three-valued logic match result. */
-export type TriState = "eligible" | "possible" | "ineligible";
+/** Three-valued verdict shown on result cards. */
+export type MatchStatus = "eligible" | "possible";
 
-export type ExecutionStatus =
-  | "pending"
-  | "running"
-  | "partial"
-  | "succeeded"
-  | "failed";
+/** Legacy name kept for Badge tokens; the API never emits "ineligible". */
+export type TriState = MatchStatus | "ineligible";
 
-export type DocumentStatus =
-  | "pending"
-  | "parsed"
-  | "partial"
-  | "encrypted"
-  | "unsupported"
-  | "failed";
-
-export type TargetType = "individual" | "business" | "both";
-
-export type ExtractMethod = "rule_based" | "llm";
-
-export type RegionLevel = "national" | "metropolitan" | "local";
+export type PolicyCategory = "individual" | "business" | "both";
 
 // ── API health ────────────────────────────────
 
@@ -39,49 +23,51 @@ export interface HealthResponse {
 
 // ── Policy search contracts ───────────────────
 
-export interface PolicyVersionRef {
-  programId: number;
-  versionNumber: number;
-  title: string;
-  summary: string | null;
-  targetType: TargetType;
-  announcementUrl: string;
+export interface EvidenceRef {
+  evidence_id: string;
+  chunk_id: number | null;
+  section: string | null;
+  location: string;
+  text_snippet: string;
 }
 
-export interface EligibilityRuleRef {
-  policyVersionId: number;
-  fieldName: string;
-  operator: string;
-  value: string | null;
-  unit: string | null;
-  evidenceRef: string | null;
-  extractMethod: ExtractMethod;
-  confidence: number | null;
-  logicalOp: string | null;
+export interface PolicyResult {
+  result_id: string;
+  policy_version_id: number;
+  policy_title: string;
+  category: PolicyCategory;
+  status: MatchStatus;
+  agency: string;
+  reasons: string[];
+  missing_info: string[];
+  benefits: string[];
+  application_deadline: string | null;
+  announcement_url: string | null;
+  evidence: EvidenceRef[];
+  rag_explanation: string | null;
 }
 
 export interface SearchProfile {
   // Individual
-  birthDate?: string;
+  birth_date?: string;
   region?: string;
-  employmentStatus?: string;
-  incomeBracket?: string;
+  employment_status?: string;
+  income_bracket?: string;
+  interest_topics?: string[];
   // Business
-  isBusinessOwner?: boolean;
-  businessStartDate?: string;
-  businessRegion?: string;
+  is_business_owner?: boolean;
+  business_start_date?: string;
+  business_region?: string;
   industry?: string;
-  annualRevenue?: number;
-  employeeCount?: number;
+  annual_revenue?: number;
+  employee_count?: number;
 }
 
-export interface SearchResult {
-  policyVersion: PolicyVersionRef;
-  triState: TriState;
-  reasons: string[];
-  missingInfo: string[];
-  benefits: string[];
-  applicationDeadline: string | null;
-  announcementUrl: string;
-  evidenceRefs: string[];
+export interface SearchResponse {
+  data_version: string;
+  results: PolicyResult[];
+  total: number;
+  page: number;
+  page_size: number;
+  rag_enabled: boolean;
 }

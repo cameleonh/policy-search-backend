@@ -1,5 +1,7 @@
 # Docker Compose deployment for policy-search-backend
 # Issue #22 — single Lightsail instance: web + api + db
+# The web tier builds from the sibling standalone repo ../policy-search-frontend
+# (the canonical presentation layer).
 
 services:
   db:
@@ -36,8 +38,10 @@ services:
 
   web:
     build:
-      context: .
-      dockerfile: Dockerfile.web
+      context: ../policy-search-frontend
+      additional_contexts:
+        contracts: ./packages/contracts
+      dockerfile: Dockerfile
     depends_on:
       api:
         condition: service_healthy
